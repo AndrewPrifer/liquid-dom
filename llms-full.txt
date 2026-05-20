@@ -321,8 +321,10 @@ export default function PremiumGlassCard() {
 ### 6.2 React Three Fiber & Three.js WebGPU Bridge
 ```tsx
 import React, { useRef } from 'react';
+import * as THREE from 'three/webgpu';
 import { Canvas } from '@react-three/fiber';
-import { LiquidGlassR3F, GlassContainer, Glass, Padding, Html } from '@liquid-dom/r3f';
+import { LiquidGlassR3F } from '@liquid-dom/r3f';
+import { GlassContainer, Glass, Padding, Html } from '@liquid-dom/react';
 
 function SceneContent() {
   return (
