@@ -1,0 +1,63 @@
+---
+description: Performance models for adaptive blurs, downsampling math, bilinear tap-pairing, backdrop luminance, settle debouncing, and WeakMap state isolation.
+globs: "packages/core/**/*, packages/react/**/*"
+alwaysApply: true
+---
+
+# Adaptive Blur & Adaptive Tinting Specs
+
+To keep frame rates high under large blur and tint updates, the WebGPU glass renderer implements mathematical decimation and backdrop analysis pipelines.
+
+## 1. Adaptive Gaussian Blur Model
+
+Applying standard Gaussian blurs over wide pixel radii is expensive. The engine optimizes this by downsampling the input texture before running a separable 1D pass.
+
+### Downsample Level Selection ($L$)
+The downsample factor is computed using the base dense radius constant (6.0px):
+$$L = \min\left(\max\left( \left\lceil \log_2\left(\frac{\text{radiusPx}}{6.0}\right) \right\rceil, 0 \right), L_{\text{max}}\right)$$
+
+### Bilinear Tap-Pairing Optimization
+Instead of sampling a standard 13-tap horizontal and vertical Gaussian filter, the shader utilizes linear hardware filtering to fetch midpoints between offset nodes. This reduces the pass to **7 taps**, saving roughly 46% of texture bandwidth:
+- **Center offset/weight**: `0.0` / `0.13702282`
+- **Bilinear offsets**: `[1.4584295, 3.4039848, 5.3518057]`
+- **Bilinear weights**: `[0.23933733, 0.1394403, 0.052710965]`
+
+---
+
+## 2. Adaptive Tinting Backdrop Analysis
+
+Adaptive tinting reads pixels behind the glass container, analyzing colors and brightness to adjust the glass overlay automatically.
+
+### Metrics Retrieval
+Activate metrics tracking on the renderer and fetch them inside a frame loop:
+```ts
+renderer.setBackdropMetricsTracking(container, true);
+const metrics = renderer.getBackdropMetrics(container);
+// Exposes averageLinearColor, averageLuminance, luminanceP10, luminanceP50, luminanceP90
+```
+
+### Median Luminance ($P_{50}$) & S-Curve Mapping
+The engine uses **median luminance ($P_{50}$)** instead of the average to ignore outlier specular glares.
+1. The luminance is mapped using a `smoothstep` S-curve over a `[0.08..0.92]` window:
+   $$\text{normalized} = \text{smoothstep}(0.08, 0.92, \text{luminanceP50})$$
+2. Clamps and shifts the target brightness:
+   $$\text{mappedBrightness} = 0.1 + \text{normalized} \times 0.75$$
+3. Brightness floor rule (preventing glass from looking dark on bright backdrops):
+   $$\text{targetBrightness} = \max(\text{mappedBrightness}, \text{luminanceP50})$$
+
+---
+
+## 3. Debounce & Smoothing Rules
+
+To prevent subpixel rendering noise or scroll updates from causing visual jitter, follow these rules:
+
+1. **Epsilon Gate**: Do not trigger target updates unless:
+   $$\lvert \text{nextObserved} - \text{observed} \rvert > 0.01$$
+2. **Settle Timer**: Changes queue a pending target scheduled for $300$ms in the future. If a new change crosses the epsilon before the timer fires, the settle timer resets.
+3. **Exponential Smoothing**: Once promoted, transition the current brightness smoothly using a frame-rate independent easing function:
+   $$\text{current} = \text{current} + (\text{target} - \text{current}) \times \left(1 - e^{-dt / \tau}\right)$$
+   - Default time constant $\tau$ (`easingDurationMs`): `500`
+4. **WeakMap Isolation**: Store all states indexed by container to prevent cross-container leaks and support multi-glass overlays:
+   ```ts
+   const adaptiveTintStates = new WeakMap<Container, AdaptiveTintState>();
+   ```

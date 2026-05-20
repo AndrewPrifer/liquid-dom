@@ -1,0 +1,372 @@
+# Liquid DOM Full API & Math Specification
+
+This document provides a comprehensive technical reference for the Liquid DOM codebase. It details package architectures, WebGPU constraints, API signatures, math/physics formulas, and real-world code snippets across all five packages in the monorepo.
+
+---
+
+## 1. Package Architecture & Relationships
+
+```mermaid
+graph TD
+    layout["@liquid-dom/layout<br/>(Pure Layout)"]
+    core["@liquid-dom/core<br/>(Imperative Graph & WebGPU)"]
+    react["@liquid-dom/react<br/>(React 19 Bindings)"]
+    three["@liquid-dom/three<br/>(Three WebGPU Adapter)"]
+    r3f["@liquid-dom/r3f<br/>(R3F WebGPU Bridge)"]
+
+    layout -->|Core Layout Nodes| core
+    core -->|Declarative Components| react
+    core -->|Core Rendering Target| three
+    react -->|R3F UI Integration| r3f
+    three -->|R3F Canvas Composite| r3f
+```
+
+- **@liquid-dom/layout** is a pure layout solver with zero external dependencies (no DOM, no CSS, no WebGPU).
+- **@liquid-dom/core** imports `layout` nodes and pairs them with WebGPU-rendered shapes.
+- **@liquid-dom/react** wraps `core` classes as declarative React 19 components and operates a custom RequestAnimationFrame animation system.
+- **@liquid-dom/three** provides a compositor to run the glass pass within a Three.js `WebGPURenderer` context.
+- **@liquid-dom/r3f** binds React layout structures and the Three WebGPU compositor under React Three Fiber canvas loops.
+
+---
+
+## 2. Hard WebGPU & Browser Runtime Constraints
+
+1. **WebGPU Target Environment**: The rendering context strictly requires `navigator.gpu`.
+2. **Three.js Compatibility**: WebGL is NOT supported. You must instantiate a `THREE.WebGPURenderer`.
+3. **HTML-in-Canvas Integration**:
+   - To render DOM content in GPU texture overlays, the Chromium flag **Canvas Draw Element** must be enabled: `chrome://flags/#canvas-draw-element`.
+   - The engine spawns a `<canvas layoutsubtree="true">` node and uses paint canvas hooks.
+4. **Strict Scene Graph Invariants**:
+   - `Scene` $\rightarrow$ `Container` | `Html` | `Group`
+   - `Container` $\rightarrow$ `Glass` | `Group`
+   - `Glass` $\rightarrow$ `Html` | `Group`
+   - **Crucial Rule**: Nesting a `Glass` directly or indirectly inside another `Glass` throws a runtime error.
+
+---
+
+## 3. Package API Reference
+
+### 3.1 @liquid-dom/layout (Renderer-Agnostic Layout Engine)
+
+#### Types
+- **`ProposedSize`**: `{ width?: number; height?: number }`
+- **`Size`**: `{ width: number; height: number }`
+- **`Rect`**: `{ x: number; y: number; width: number; height: number }`
+- **`Insets`**: `{ top: number; right: number; bottom: number; left: number }`
+- **`InsetsInput`**: `number` (all sides), partial `{ top?, right?, bottom?, left? }`, or `{ horizontal?, vertical? }`.
+
+#### Core Functions
+- **`createLayoutEngine(options?: { root?: LayoutNode; onInvalidate?: (inv) => void; maxCachedMeasurements?: number })`**:
+  - `layout(proposal: ProposedSize): LayoutDebugStats`
+- **`leaf({ measure: (p: ProposedSize) => Size; subscribe?: (notify) => () => void; measureKey?: unknown })`**:
+  - Exposes `.invalidateMeasure(cause?: string)`
+- **`domLeaf({ element: HTMLElement; sizing?: 'intrinsic' | 'constrained-width' | 'fill'; measureKey?: unknown })`**
+- **Container Composers**:
+  - `hstack({ spacing?: number; alignment?: 'top' | 'center' | 'bottom' | 'stretch' }, ...children)`
+  - `vstack({ spacing?: number; alignment?: 'left' | 'center' | 'right' | 'stretch' }, ...children)`
+  - `zstack({ alignment?: 'center' | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' }, ...children)`
+  - `frame(child?, { width?, height?, minWidth?, minHeight?, idealWidth?, idealHeight?, maxWidth?, maxHeight?, alignment? })`
+  - `padding(child?, { insets: InsetsInput })`
+  - `background({ alignment? })` / `overlay({ alignment? })`
+  - `spacer({ minLength?: number })`
+
+---
+
+### 3.2 @liquid-dom/core (Imperative WebGPU Graph)
+
+#### `Scene`
+- `add(child: Container | Html | Group)`
+- `_notifyMutation()`
+
+#### `Group`
+- `new Group(options?: Partial<Transform>)`
+- `add(child)` / `remove()`
+
+#### `Html`
+- `new Html(options?: { width?, height?, opacity?, blur?, zIndex?, element? })`
+- `setElement(el: HTMLElement | null)`
+
+#### `Glass`
+- `new Glass(options?: { width?, height?, cornerRadius?, cornerSmoothing?, pointerEvents?, zIndex? })`
+- *SDF Hit Testing Events*: Supports `'click' | 'pointerenter' | 'pointerleave' | 'pointermove' | 'pointerdown' | 'pointerup'`.
+
+#### `Container` (Optical Properties)
+All optical properties are defined on the `Container` node:
+
+| Property | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `opacity` | `number` | `1` | Layer and shadow alpha blending |
+| `spacing` | `number` | `12` | Blending expansion distance between neighboring SDF shapes (CSS px) |
+| `blur` | `number` | `8` | Backdrop Gaussian blur radius (CSS px) |
+| `bezelWidth` | `number` | `14` | Inner bevel boundary width (CSS px) |
+| `thickness` | `number` | `90` | Depth of optical glass refraction (CSS px) |
+| `displacementFactor` | `number` | `1` | Refraction scaling |
+| `displacementBlur` | `number` | `6` | Softness blur of displacement map (CSS px) |
+| `normalDivergenceBlendPower` | `number` | `0.5` | Extent of union normal alignment gating |
+| `normalDivergenceBlendEnabled`| `boolean`| `true` | Normal alignment gate switch |
+| `ior` | `number` | `1.5` | Index of refraction (backdrop) |
+| `contentIor` | `number` | `1` | Index of refraction (contained `<Html>`) |
+| `contentDepth` | `number` | `0` | Refractive depth displacement for internal HTML content |
+| `dispersion` | `number` | `0` | Chromatic aberration scale |
+| `surfaceProfile` | `'convex'\|'concave'\|'lip'`| `'convex'` | Bevel shape profile |
+| `lightDirection` | `number` | `-Math.PI/4` | Light source angle in radians (0 = Up) |
+| `specularStrength` | `number` | `1` | Specular reflection multiplier |
+| `specularWidth` | `number \| 'hairline'` | `1` | Specular band thickness (CSS px or `'hairline'`) |
+| `specularFalloff` | `number` | `1` | Sharpness decay |
+| `oppositeSpecularStrength` | `number`| `1` | Bevel rim glow opposite light direction |
+| `specularSharpness` | `number` | `2` | Light highlight decay power |
+| `specularOpacity` | `number` | `0.45` | Specular composite alpha |
+| `reflectionOffset` | `number` | `18` | Offset scale for environment reflections |
+| `tint` | `{r,g,b,a}` | `{r:1,g:1,b:1,a:0.15}`| Colored layer overlaid on glass |
+| `shadowColor` | `{r,g,b,a}` | `{r:0,g:0,b:0,a:0.12}`| Drop shadow parameters |
+| `shadowOffsetX` | `number` | `0` | Drop shadow X displacement (CSS px) |
+| `shadowOffsetY` | `number` | `10` | Drop shadow Y displacement (CSS px) |
+| `shadowBlur` | `number` | `24` | Drop shadow blur filter (CSS px) |
+| `shadowSpread` | `number` | `0` | Shadow contour offset inflation |
+
+---
+
+### 3.3 @liquid-dom/react (React 19 Declarative Integration)
+
+- **`<LiquidCanvas>`**: High-level viewport. Uses `'always' | 'demand'` frameloop (default `'always'`).
+- **`<LiquidScene>`**: Root for custom pipelines.
+- **Layout & Decorator Tags**: `<HStack>`, `<VStack>`, `<ZStack>`, `<Frame>`, `<Padding>`, `<Background>`, `<Overlay>`, `<Transform>`, `<Spacer>`.
+- **Glass Nodes**: `<GlassContainer>`, `<Glass>`, `<Html>`.
+  - Props map exactly to core properties.
+  - `<Html>` requires `sizing` prop: `'intrinsic' | 'constrained-width' | 'fill'`.
+
+---
+
+### 3.4 @liquid-dom/three (Three.js WebGPU Context Adapter)
+
+#### `ThreeGlassRenderer`
+- **Constructor**: `new ThreeGlassRenderer({ renderer: THREE.WebGPURenderer; scene?: Scene; format?: GPUTextureFormat })`
+- **`render(options)`**: Composites liquid scene graph over background textures.
+  - `options`: `{ backdrop: GPUTexture | RenderTarget | Texture; scene?: Scene; outputTexture?: GPUTexture; width?: number; height?: number; dpr?: number }`
+
+---
+
+### 3.5 @liquid-dom/r3f (React Three Fiber Bridge)
+
+- **`<LiquidGlassR3F.Root>`**: Initializes state context.
+- **`<LiquidGlassR3F.Scene>`**: Contains declarative `<HStack>`, `<VStack>`, `<GlassContainer>`, etc.
+- **`<LiquidGlassR3F.Render>`**: Triggers backdrop capture and compositing within the R3F WebGPURenderer loop. Exposes `renderPriority` (default `1`).
+
+---
+
+## 4. Animation Systems & Math Formulations
+
+### 4.1 Physics-Based Spring Model
+
+Animations bypass standard React renders and write properties directly onto the core nodes. The spring utilizes a semi-implicit Euler integration loop running substepped iterations to guarantee numerical stability at low frame rates.
+
+#### Substepped Integrator Math
+To avoid exploding under large frame deltas, frame time $dt$ is substepped:
+1. **Timescale Scaling & Cap**:
+   $$dt_{\text{scaled}} = dt \times \text{timeScale}$$
+   $$dt_{\text{spring}} = \min(0.064, dt_{\text{scaled}})$$
+2. **Substep Division**:
+   $$\text{stepCount} = \max\left(1, \left\lceil \frac{dt_{\text{spring}}}{1/60} \right\rceil\right)$$
+   $$\text{stepSeconds} = \frac{dt_{\text{spring}}}{\text{stepCount}}$$
+3. **Integration Equations**:
+   For each substep, the acceleration and velocity are resolved:
+   $$F_s = -k \cdot (x - x_{\text{target}})$$
+   $$F_d = -c \cdot v$$
+   $$a = \frac{F_s + F_d}{m}$$
+   $$v_{\text{next}} = v + a \cdot \text{stepSeconds}$$
+   $$x_{\text{next}} = x + v_{\text{next}} \cdot \text{stepSeconds}$$
+   Where:
+   - $k$ is `stiffness` (default `300`)
+   - $c$ is `damping` (default `30`)
+   - $m$ is `mass` (default `1`)
+
+#### Settlement Rules
+A spring is settled and snapped directly to target when:
+$$\lvert v \rvert \le 0.01 \quad \text{and} \quad \lvert x - x_{\text{target}} \rvert \le 0.01$$
+
+---
+
+### 4.2 Easing & Cubic Bezier Solver
+
+For duration-bound transitions, progress is evaluated as $p = \text{clamp01}(t_{\text{elapsed}} / \text{duration})$. The progress $p$ is passed to an analytical 2D Cubic Bezier Solver:
+$$B(t, p_1, p_2) = 3(1-t)^2 t p_1 + 3(1-t) t^2 p_2 + t^3$$
+
+#### Evaluation Solver
+1. **Newton-Raphson Iteration (Up to 8 steps)**:
+   $$t_{n+1} = t_n - \frac{B(t_n, cx_1, cx_2) - x}{B'(t_n, cx_1, cx_2)}$$
+   *Exit conditions*: $\lvert B(t_n) - x \rvert < 10^{-6}$, or if $t$ falls out of $[0, 1]$, or derivative $B'(t) < 10^{-6}$ (divide by zero protection).
+2. **Binary Search Fallback (Up to 16 steps)**:
+   Runs binary division on the interval $[lower, upper]$, initialized to $[0, 1]$:
+   - $t = (lower + upper) / 2$
+   - If $B(t) < x$, set $lower = t$, else $upper = t$.
+3. **Final Mapping**: Returns $y = B(t, cy_1, cy_2)$.
+
+---
+
+### 4.3 Component and Hook APIs
+
+- **`transition` Prop**:
+  ```tsx
+  <Frame
+    width={expanded ? 400 : 200}
+    transition={{
+      width: spring({ stiffness: 200, damping: 20 }),
+      height: easing({ duration: 0.3, ease: Easing.easeOut }),
+      default: spring()
+    }}
+  />
+  ```
+- **`<AnimationConfigProvider>`**:
+  - Prop: `timeScale?: number` (playback multiplier, e.g. `0.5` = slow motion).
+- **`useFrame(callback: (state: FrameState) => void, priority = 0)`**
+- **`useAnimate(): (node, target, config) => AnimationControls`**
+- **`useTimeline()`**:
+  - Chains timeline animations: `.to(node, { x }).call(cb).play()`.
+
+---
+
+## 5. Performance Optimizations: Adaptive Blur & Adaptive Tint
+
+### 5.1 Adaptive Blur Model
+To achieve large blur radii without tanking performance, the engine dynamically downsamples the target using a progressive box downsampling chain.
+
+#### Level Selection ($L$):
+$$L = \min\left(\max\left( \left\lceil \log_2\left(\frac{\text{radiusPx}}{6.0}\right) \right\rceil, 0 \right), L_{\text{max}}\right)$$
+The downsampled dimension scales to $1 / 2^L$. The blur pass is computed in two separable 1D passes using a **7-tap bilinear pairing lookup** instead of standard 13-tap filters, reducing sampler requests by roughly 46%:
+- **Center weight**: `0.13702282` at offset `0.0`
+- **Bilinear offsets**: `[1.4584295, 3.4039848, 5.3518057]`
+- **Bilinear weights**: `[0.23933733, 0.1394403, 0.052710965]`
+
+---
+
+### 5.2 Adaptive Tinting System
+Adaptive tinting matches glass overlays to backlighting using real-time luminance tracking.
+
+1. **Backdrop Metrics**: Read via `renderer.getBackdropMetrics(container)`.
+2. **Median Luminance ($P_{50}$)**: The median is chosen to avoid outlier specular spikes skewing the S-Curve.
+3. **S-Curve Brightness Mapping**:
+   $$\text{normalized} = \text{smoothstep}(0.08, 0.92, \text{luminanceP50})$$
+   $$\text{mappedBrightness} = 0.1 + \text{normalized} \times 0.75$$
+   $$\text{targetBrightness} = \max(\text{mappedBrightness}, \text{luminanceP50})$$
+4. **Debounce Logic**: A new update is only queued if $\lvert \text{observed} - \text{pending} \rvert > 0.01$. Settle timer is scheduled for $+300$ms.
+5. **Exponential Smoothing**: The active brightness transitions smoothly:
+   $$\text{current} = \text{current} + (\text{target} - \text{current}) \times (1 - e^{-dt / 0.5})$$
+6. **Isolated State Cache**: Tracked using a `WeakMap<Container, AdaptiveTintState>()` to avoid memory leaks.
+
+---
+
+## 6. End-to-End Examples
+
+### 6.1 React 19 Declarative Glass Component
+```tsx
+import React, { useState } from 'react';
+import { LiquidCanvas, GlassContainer, Glass, VStack, HStack, Frame, Padding, Spacer, Html, spring, Easing, easing } from '@liquid-dom/react';
+
+export default function PremiumGlassCard() {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <LiquidCanvas style={{ width: '100vw', height: '100vh', background: '#0a0a0c' }}>
+      <Frame alignment="center" width={400} height={500}>
+        <GlassContainer
+          blur={12}
+          thickness={100}
+          ior={1.6}
+          spacing={16}
+          tint={{ r: 0.1, g: 0.1, b: 0.12, a: 0.3 }}
+          shadowColor={{ r: 0, g: 0, b: 0, a: 0.25 }}
+        >
+          <Glass
+            cornerRadius={24}
+            cornerSmoothing={0.6}
+            pointerEvents={true}
+            onClick={() => setExpanded(!expanded)}
+          >
+            <Padding insets={{ horizontal: 24, vertical: 20 }}>
+              <VStack spacing={16} alignment="stretch">
+                <HStack alignment="center">
+                  <Html sizing="intrinsic">
+                    <h1 style={{ color: '#fff', fontSize: '20px', margin: 0 }}>Liquid Card</h1>
+                  </Html>
+                  <Spacer />
+                  <Html sizing="intrinsic">
+                    <button style={{ background: '#333', border: 0, color: '#fff', padding: '6px 12px', borderRadius: '6px' }}>
+                      Close
+                    </button>
+                  </Html>
+                </HStack>
+
+                <Frame
+                  height={expanded ? 180 : 0}
+                  transition={{
+                    height: spring({ stiffness: 220, damping: 22 })
+                  }}
+                >
+                  <Html sizing="fill">
+                    <p style={{ color: '#aaa', margin: 0, overflow: 'hidden' }}>
+                      This contains beautifully blended WebGPU liquid glass components driven by a SwiftUI-style layout system.
+                    </p>
+                  </Html>
+                </Frame>
+              </VStack>
+            </Padding>
+          </Glass>
+        </GlassContainer>
+      </Frame>
+    </LiquidCanvas>
+  );
+}
+```
+
+### 6.2 React Three Fiber & Three.js WebGPU Bridge
+```tsx
+import React, { useRef } from 'react';
+import { Canvas } from '@react-three/fiber';
+import { LiquidGlassR3F, GlassContainer, Glass, Padding, Html } from '@liquid-dom/r3f';
+
+function SceneContent() {
+  return (
+    <>
+      <ambientLight intensity={0.5} />
+      <mesh position={[0, 0, -2]}>
+        <boxGeometry />
+        <meshStandardMaterial color="hotpink" />
+      </mesh>
+
+      {/* Bridge overlays on top of the R3F WebGPURenderer canvas output */}
+      <LiquidGlassR3F.Scene>
+        <GlassContainer blur={16} thickness={120}>
+          <Glass cornerRadius={16} pointerEvents={true}>
+            <Padding insets={16}>
+              <Html sizing="intrinsic">
+                <div style={{ color: '#fff', fontFamily: 'sans-serif' }}>
+                  Floating Glass on R3F Canvas
+                </div>
+              </Html>
+            </Padding>
+          </Glass>
+        </GlassContainer>
+      </LiquidGlassR3F.Scene>
+
+      {/* Performs the WebGPU backdrop-render composite pass */}
+      <LiquidGlassR3F.Render renderPriority={1} />
+    </>
+  );
+}
+
+export default function App() {
+  return (
+    <Canvas
+      gl={(canvas) => {
+        // Must return THREE.WebGPURenderer context
+        const renderer = new THREE.WebGPURenderer({ canvas, antialias: true });
+        return renderer;
+      }}
+    >
+      <LiquidGlassR3F.Root>
+        <SceneContent />
+      </LiquidGlassR3F.Root>
+    </Canvas>
+  );
+}
+```
