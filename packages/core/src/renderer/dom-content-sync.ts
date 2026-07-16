@@ -39,10 +39,12 @@ type ContentDataBuffer = GpuStructArrayBuffer<GpuStructDefinition<typeof Content
 /** Chrome's experimental queue extension for copying DOM elements to textures. */
 type GPUQueueWithElementCopy = GPUQueue & {
   copyElementImageToTexture: (
-    source: Element,
-    width: number,
-    height: number,
-    destination: { texture: GPUTexture; origin?: { x: number; y: number; z?: number } },
+    source: { source: Element },
+    destination: {
+      destination: GPUImageCopyTextureTagged
+      width: number
+      height: number
+    },
   ) => void
 }
 
@@ -130,6 +132,24 @@ export function getTextureUvScale(deviceSize: number, cssSize: number, textureSi
     return 0
   }
   return deviceSize / cssSize / textureSize
+}
+
+/** Copies one DOM element into a WebGPU texture using the current HTML-in-Canvas API. */
+export function copyElementToTexture(
+  queue: GPUQueue,
+  source: Element,
+  width: number,
+  height: number,
+  texture: GPUTexture,
+) {
+  ;(queue as GPUQueueWithElementCopy).copyElementImageToTexture(
+    { source },
+    {
+      destination: { texture },
+      width,
+      height,
+    },
+  )
 }
 
 /** Synchronizes DOM-backed HTML hosts, textures, atlases, and content buffers. */
@@ -848,11 +868,12 @@ export class DomContentSync {
       }
 
       try {
-        ;(this.device.queue as GPUQueueWithElementCopy).copyElementImageToTexture(
+        copyElementToTexture(
+          this.device.queue,
           entry.html.host,
           entry.deviceWidth,
           entry.deviceHeight,
-          { texture: entry.texture },
+          entry.texture,
         )
         entry.copiedDeviceWidth = entry.deviceWidth
         entry.copiedDeviceHeight = entry.deviceHeight
@@ -945,11 +966,12 @@ export class DomContentSync {
       }
 
       try {
-        ;(this.device.queue as GPUQueueWithElementCopy).copyElementImageToTexture(
+        copyElementToTexture(
+          this.device.queue,
           entry.html.host,
           entry.deviceWidth,
           entry.deviceHeight,
-          { texture: entry.sourceTexture },
+          entry.sourceTexture,
         )
         entry.copiedDeviceWidth = entry.deviceWidth
         entry.copiedDeviceHeight = entry.deviceHeight
