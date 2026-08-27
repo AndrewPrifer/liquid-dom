@@ -1,0 +1,28 @@
+# Liquid DOM
+
+Liquid DOM is a high-performance WebGPU liquid-glass rendering monorepo featuring a renderer-agnostic SwiftUI-like layout engine, React 19 bindings, Three.js WebGPU integration, and React Three Fiber (R3F) bridges.
+
+## Core Architecture & Package Relationships
+
+- **@liquid-dom/layout**: Pure mathematical layout engine (Proposal $\rightarrow$ Measurement $\rightarrow$ Placement). Zero external dependencies, no DOM or GPU awareness.
+- **@liquid-dom/core**: Direct WebGPU glass renderer and imperative scene graph wrapping the layout engine.
+- **@liquid-dom/react**: Declarative React 19 component wrappers using high-performance, RAF-ticked off-react spring and easing animations.
+- **@liquid-dom/three**: Back-composites WebGPU glass overlays over Three.js `WebGPURenderer` outputs. (No WebGL support).
+- **@liquid-dom/r3f**: Bridges React Three Fiber and the React liquid scene graph.
+
+## Critical Engine & Browser Constraints
+
+1. **WebGPU Requirement**: All rendering requires a valid GPU device and context (`navigator.gpu`). When using Three.js, you MUST use Three's `WebGPURenderer`, NOT `WebGLRenderer`.
+2. **HTML-in-Canvas Flag**: Live DOM-backed elements inside `<Html>` nodes require enabling Chrome's experimental flag: `chrome://flags/#canvas-draw-element` (*Canvas Draw Element* flag).
+3. **Strict Invariant Hierarchy Rules**:
+   - `Scene` accepts ONLY `Container` | `Html` | `Group`.
+   - `Container` accepts ONLY `Glass` | `Group`.
+   - `Glass` accepts ONLY `Html` | `Group`.
+   - **Invalid nesting**: Nesting a `Glass` under another `Glass` is forbidden and will throw a runtime error.
+
+## Specifications & Rule Files
+
+- **[Full API & Math Specs](./llms-full.txt)**: Exhaustive details on class structures, spring steps, bezier solvers, 7-tap bilinear downsamplers, and adaptive $P_{50}$ luminance tinting.
+- **[Agent Coordination Guide](./agents.md)**: Rules for AI agent roles, modular coding, task decomposition, and code generation standards.
+- **[AI Agent Guide](./AI_AGENT_GUIDE.md)**: User instructions on importing and utilizing these prompt sets.
+- **[Cursor Rules](./.cursor/rules)**: MDC formatted prompt specifications for Cursor IDE.

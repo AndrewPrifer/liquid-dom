@@ -1,0 +1,78 @@
+---
+description: Sizing modes, layout container tags, child limits, and React Three Fiber bridging for Liquid DOM's React bindings.
+globs: "packages/react/**/*, packages/r3f/**/*"
+alwaysApply: true
+---
+
+# React Layout Components & R3F Integration
+
+This file covers the declarative React 19 component library bindings, sizing modes, layout restrictions, and React Three Fiber (R3F) structures.
+
+## 1. SwiftUI-Style Layout Elements
+
+- **`<HStack>` / `<VStack>`**: Horizontal and vertical stacking.
+  - Props: `spacing?: number`, `alignment?: string`.
+- **`<ZStack>`**: Layers children front-to-back.
+  - Props: `alignment?: string`.
+- **`<Frame>`**: Clamps child sizing.
+  - Props: `width`, `height`, `minWidth`, `minHeight`, `idealWidth`, `idealHeight`, `maxWidth`, `maxHeight`, `alignment`.
+  - **Restriction**: Accepts exactly ONE layout child.
+- **`<Padding>`**: Insets the child layout.
+  - Props: `insets?: number | { top?, right?, bottom?, left? } | { horizontal?, vertical? }`.
+  - **Restriction**: Accepts exactly ONE layout child.
+- **`<Spacer>`**: Fills available axis space.
+  - Props: `minLength?: number`.
+- **`<Transform>`**: Translates, rotates, and scales.
+  - Props: `x`, `y`, `scaleX`, `scaleY`, `rotation` (radians), `origin` (`{ x, y }` normalized coordinates, e.g., `{ x: 0.5, y: 0.5 }` is center).
+  - **Restriction**: Accepts exactly ONE layout child.
+
+---
+
+## 2. `<Html>` Sizing Modes
+
+When hosting DOM portals inside `<Html>` nodes, you must explicitly declare the `sizing` prop:
+
+- **`'intrinsic'`**: The node sizes itself automatically to match the browser's bounding box calculation of the DOM subtree.
+- **`'constrained-width'`**: The parent layout dictates the width proposal, and the DOM subtree determines its height based on wrapping behavior.
+- **`'fill'`**: The parent layout dictates both the width and height. The DOM subtree expands to fill this container size exactly.
+
+---
+
+## 3. React Three Fiber (R3F) Integration
+
+To overlay glass layouts atop standard R3F 3D viewports:
+
+1. Wrap the Three Canvas elements inside `<LiquidGlassR3F.Root>`.
+2. Wrap your layout stack inside `<LiquidGlassR3F.Scene>` (nested as a child of the Root).
+3. Place `<LiquidGlassR3F.Render>` inside the Canvas to trigger the WebGPU backdrop compositor. Always pass `renderPriority` (defaults to `1`) to composite glass in the correct order.
+4. Ensure the React Three Fiber Canvas is configured to use Three's `WebGPURenderer`.
+
+---
+
+## 4. Code Pattern Examples
+
+### Correct Layout Hierarchy
+```tsx
+import { LiquidCanvas, GlassContainer, Glass, VStack, HStack, Padding, Html } from '@liquid-dom/react';
+
+function LayoutApp() {
+  return (
+    <LiquidCanvas style={{ width: '100%', height: '100%' }}>
+      <GlassContainer blur={8} spacing={10}>
+        <Glass cornerRadius={12}>
+          {/* OK: Padding wraps exactly one VStack */}
+          <Padding insets={16}>
+            <VStack spacing={12}>
+              <HStack spacing={8}>
+                <Html sizing="intrinsic"><div>Icon</div></Html>
+                <Html sizing="intrinsic"><h2>Title</h2></Html>
+              </HStack>
+              <Html sizing="fill"><p>Body text fitting frame bounds.</p></Html>
+            </VStack>
+          </Padding>
+        </Glass>
+      </GlassContainer>
+    </LiquidCanvas>
+  );
+}
+```

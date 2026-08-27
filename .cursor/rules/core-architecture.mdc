@@ -1,0 +1,63 @@
+---
+description: Structural design rules, package dependencies, WebGPU constraints, and scene graph nesting invariants for Liquid DOM.
+globs: "packages/core/**/*, packages/layout/**/*, packages/three/**/*"
+alwaysApply: true
+---
+
+# Core Architecture & WebGPU Constraints
+
+This file defines the structural constraints, package relations, and scene invariants for Liquid DOM.
+
+## 1. Package Dependencies & Import Hierarchy
+
+- **`@liquid-dom/layout`**: Core layout algorithms. Has zero external dependencies and does not know about the DOM, CSS, or rendering. Do NOT import renderers or browser APIs in layout.
+- **`@liquid-dom/core`**: The main rendering engine. Imports `@liquid-dom/layout` nodes inside `@liquid-dom/core/layout` subpaths to bind them with WebGPU elements.
+- **`@liquid-dom/three`**: The adapter for standard Three.js render loops. Wraps `core` elements. It is ONLY compatible with `WebGPURenderer`. It does NOT support WebGL.
+
+---
+
+## 2. Hard Rendering Constraints
+
+1. **WebGPU ONLY**: The canvas rendering requires `navigator.gpu`. In Three.js integrations, always use `THREE.WebGPURenderer`. Guard all WebGPU setups with features checks.
+2. **HTML-in-Canvas Chrome Flag**: Drawing DOM elements onto WebGPU glass textures requires enabling the Canvas Draw Element flag: `chrome://flags/#canvas-draw-element`.
+   - The engine spawns a `<canvas layoutsubtree="true">` to synchronize repaint hooks. Without this flag enabled in the client browser, HTML textures will be blank.
+
+---
+
+## 3. Strict Scene Graph Invariant Nesting Rules
+
+When building or modifying scene graph elements (`Scene`, `Container`, `Glass`, `Html`, `Group`), you MUST follow these absolute parenting rules:
+
+- **`Scene`** accepts ONLY `Container` | `Html` | `Group`.
+- **`Container`** accepts ONLY `Glass` | `Group`.
+  - All sibling `Glass` children in a container are blended via SDF calculations and share the same container's optical properties.
+- **`Glass`** accepts ONLY `Html` | `Group`.
+  - `<Html>` elements are sampled through the bounds of the host glass node.
+- **`Group`** and **`StackingContext`** are layout-neutral and can wrap elements to apply transforms. They do NOT disrupt stacking or validate constraints of their children.
+
+> [!CAUTION]
+> **No Nested Glass**: You cannot nest a `Glass` node inside another `Glass` node. Doing so will raise a runtime validation error. If you need stacked layers, put them in a `ZStack` as siblings under separate layout bounds.
+
+---
+
+## 4. Code Pattern Examples
+
+### Imperative Scene Graph Setup (Core)
+```ts
+import { Scene, Container, Glass, Html, StackingContext } from '@liquid-dom/core';
+
+const scene = new Scene();
+
+// OK: Scene -> Container
+const container = new Container({ blur: 10, thickness: 80 });
+scene.add(container);
+
+// OK: Container -> Glass
+const card = new Glass({ cornerRadius: 16 });
+container.add(card);
+
+// OK: Glass -> Html
+const label = new Html({ width: 100, height: 40 });
+label.setElement(document.getElementById('my-label'));
+card.add(label);
+```

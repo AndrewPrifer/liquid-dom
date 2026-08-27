@@ -1,0 +1,91 @@
+---
+description: Custom animation systems, spring physics equations, cubic bezier curves, timeScale configuration, and hook/timeline APIs.
+globs: "packages/react/**/*, packages/r3f/**/*"
+alwaysApply: true
+---
+
+# Animation System & Physics Integration
+
+Liquid DOM manages high-performance animations outside of standard React renders, editing scene node positions directly on each frame tick.
+
+## 1. Physics-Based Spring System
+
+The animation loop utilizes a substepped integrator to guarantee stability under frame drops and low performance.
+
+### Spring Configurations
+- **`stiffness`**: Restoration force constant $k$ (default `300`).
+- **`damping`**: Friction decay $c$ (default `30`).
+- **`mass`**: Inertia constant $m$ (default `1`).
+- **`restSpeed`**: Minimum velocity threshold (default `0.01`).
+- **`restDelta`**: Minimum error distance (default `0.01`).
+
+### Integration Loop Rules
+1. Every frame delta $dt$ is scaled:
+   $$dt_{\text{scaled}} = dt \times \text{timeScale}$$
+2. The step size is clamped to a maximum of 64ms:
+   $$dt_{\text{spring}} = \min(0.064, dt_{\text{scaled}})$$
+3. The delta is divided into 60Hz intervals:
+   $$\text{stepCount} = \max\left(1, \left\lceil \frac{dt_{\text{spring}}}{1/60} \right\rceil\right)$$
+   $$\text{stepSeconds} = \frac{dt_{\text{spring}}}{\text{stepCount}}$$
+4. Substep iteration equations:
+   $$F_s = -k \cdot (x - x_{\text{target}})$$
+   $$F_d = -c \cdot v$$
+   $$a = \frac{F_s + F_d}{m}$$
+   $$v_{\text{next}} = v + a \cdot \text{stepSeconds}$$
+   $$x_{\text{next}} = x + v_{\text{next}} \cdot \text{stepSeconds}$$
+
+---
+
+## 2. Bezier Easing Solver
+
+For traditional duration transitions, the solver maps linear progress $p = \text{clamp01}(t_{\text{elapsed}} / \text{duration})$ using a 2D Cubic Bezier Solver:
+1. Runs **Newton-Raphson iteration** up to 8 times:
+   $$t_{n+1} = t_n - \frac{B(t_n, cx_1, cx_2) - x}{B'(t_n, cx_1, cx_2)}$$
+2. Falls back to **Binary Search** up to 16 times if Newton-Raphson fails to converge.
+3. Evaluates and maps the coordinate $y = B(t, cy_1, cy_2)$.
+
+---
+
+## 3. Hook & Timeline APIs
+
+- **`useFrame(callback, priority)`**: Runs a custom callback inside the canvas frame tick loop. State parameters include `layoutScene`, `renderer`, `scene`, `canvas`, `time`, `delta`, `invalidateLayout`, and `invalidateFrame`.
+- **`useAnimate()`**: Triggers direct, imperative property transitions:
+  ```ts
+  const animate = useAnimate();
+  const controls = animate(node, { x: 100 }, spring({ stiffness: 200 }));
+  // controls exposes .stop() and .finished Promise
+  ```
+- **`useTimeline()`**: Chains multi-node sequences:
+  ```ts
+  const createTimeline = useTimeline();
+  const tl = createTimeline()
+    .to(node1, { scaleX: 1.2 }, spring())
+    .to(node2, { y: 50 }, easing({ duration: 0.4 }))
+    .call(() => console.log('Sequence done!'))
+    .play();
+  ```
+- **`<AnimationConfigProvider>`**:
+  - Prop: `timeScale?: number`. Set `timeScale={0.5}` to trigger half-speed slow-motion effects.
+
+---
+
+## 4. Code Pattern Examples
+
+### Declarative Animations
+```tsx
+import { Frame, spring, easing, Easing } from '@liquid-dom/react';
+
+function AnimatedCard({ active }: { active: boolean }) {
+  return (
+    <Frame
+      width={active ? 300 : 150}
+      height={active ? 200 : 100}
+      transition={{
+        width: spring({ stiffness: 220, damping: 18 }),
+        height: easing({ duration: 0.35, ease: Easing.easeInOut }),
+        default: spring()
+      }}
+    />
+  );
+}
+```
